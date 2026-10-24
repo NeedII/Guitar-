@@ -1,0 +1,12 @@
+# compilação
+build/
+*.o
+*.exe
+*.res
+third_party/raylib/
+tools/icone_gerado/
+
+# arquivos pessoais criados pelo programa ao lado do .exe
+guitarra.ini
+presets.txt
+Gravações/
