@@ -216,6 +216,19 @@ static int appliedValid = 0;
 
 /* gate */
 static struct { float env, g; int open; } gate;
+/* Detector dos redutores de ruído: olha só a faixa da guitarra (abaixo de ~1,2 kHz)
+   e mede o nível médio, não os picos. Assim o chiado, que é quase todo agudo,
+   não consegue manter o gate aberto. */
+typedef struct { Biquad lp; float e2, k; } NoiseDet;
+static NoiseDet gateDet, drvDet;
+static void ndSetup(NoiseDet* d) { bqSet(&d->lp, BQ_LP, FS, 1200, 0.707f, 0); d->k = 1.0f - expf(-1.0f / (0.008f * FS)); }
+static void ndReset(NoiseDet* d) { d->lp.z1 = d->lp.z2 = 0; d->e2 = 0; }
+static inline float ndLevel(NoiseDet* d, float x)
+{
+    float v = bq(&d->lp, x);
+    d->e2 += (v * v - d->e2) * d->k;
+    return sqrtf(d->e2) * 1.41f;
+}
 /* compressor */
 static struct { float env, gsm; } comp;
 /* filtro */
@@ -398,10 +411,10 @@ static void setupReverb(const SlotState* s)
 static void resetSlot(int s)
 {
     switch (s) {
-    case S_GATE: memset(&gate, 0, sizeof gate); gate.g = 1; break;
+    case S_GATE: memset(&gate, 0, sizeof gate); gate.g = 1; ndReset(&gateDet); break;
     case S_COMP: memset(&comp, 0, sizeof comp); comp.gsm = 1; break;
     case S_FILTER: memset(&wah, 0, sizeof wah); break;
-    case S_DRIVE: { memset(&drv, 0, sizeof drv); } break;
+    case S_DRIVE: { memset(&drv, 0, sizeof drv); ndReset(&drvDet); } break;
     case S_EQ: for (int i = 0; i < 7; i++) { eqf[i].z1 = eqf[i].z2 = 0; } break;
     case S_MOD: dlClear(&mod.dl); mod.ph = 0; mod.fb = 0; mod.last = 0; memset(mod.apx, 0, sizeof mod.apx); memset(mod.apy, 0, sizeof mod.apy); break;
     case S_DELAY: dlClear(&dly.dl); dly.tone.z = 0; break;
@@ -443,8 +456,7 @@ static inline float doGate(const SlotState* s, float x)
 {
     float th = db2lin(param_value(&T_GATE[0].k[0], s->k[0]));
     float relMs = param_value(&T_GATE[0].k[1], s->k[1]);
-    float a = fabsf(x);
-    gate.env = a > gate.env ? a : gate.env * 0.9993f;
+    gate.env = ndLevel(&gateDet, x);
     if (!gate.open && gate.env > th) gate.open = 1;
     else if (gate.open && gate.env < th * 0.5f) gate.open = 0;
     float target = gate.open ? 1.0f : 0.0f;
@@ -502,7 +514,7 @@ static inline float doFilter(const SlotState* s, float x)
 /* redutor de ruído interno dos drives de alto ganho: abaixa o chiado quando você para de tocar */
 static inline float driveExpander(float x)
 {
-    float a = fabsf(x);
+    float a = ndLevel(&drvDet, x);
     drv.nenv += (a - drv.nenv) * (a > drv.nenv ? drv.natk : drv.nrel);
     const float th = 0.00126f;  /* -58 dBFS */
     float g = drv.nenv >= th ? 1.0f : (drv.nenv / th) * (drv.nenv / th);
@@ -762,6 +774,7 @@ void dsp_reset(void)
 void dsp_init(float fs)
 {
     FS = fs > 8000 ? fs : 48000;
+    ndSetup(&gateDet); ndSetup(&drvDet);
     dlAlloc(&mod.dl, (int)(FS * 0.05f) + 8);
     dlAlloc(&dly.dl, (int)(FS * 1.6f) + 8);
     dlAlloc(&rv.pre, (int)(FS * 0.13f) + 8);
