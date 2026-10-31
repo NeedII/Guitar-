@@ -34,6 +34,8 @@ const FactoryPreset FACTORY[] = {
       "amp=3 cab=3 ak=.62,.55,.65,.6,.5,.5 gate=1,0:.4,.35 reverb=1,0:.3,.5,.1" },
     { "Solo com wah · Guns N' Roses",
       "amp=3 cab=3 ak=.72,.5,.65,.6,.5,.5 gate=1,0:.4,.4 filter=1,0:.55,.55,1 delay=1,0:.6,.3,.2,.75 reverb=1,1:.45,.5,.15,.2" },
+    { "Animal I Have Become · Three Days Grace",
+      "amp=4 cab=3 ak=.66,.6,.32,.6,.6,.5 gate=1,0:.42,.25 drive=1,0:.08,.62,.72 eq=1,0:.53,.5,.44,.46,.5,.56,.5,.5 reverb=1,0:.2,.5,.06" },
     { "Alto ganho",
       "amp=4 cab=3 ak=.7,.6,.45,.6,.55,.5 gate=1,0:.45,.3 eq=1,0:.55,.5,.42,.45,.5,.55,.5,.5" },
 };
