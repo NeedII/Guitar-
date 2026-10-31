@@ -67,6 +67,8 @@ static Preset presets[MAXPRESETS];
 static int nPresets = 0, curPreset = 0;
 
 static float* activeV = NULL;
+static float* activeScroll = NULL; static float scrollGrab = 0;
+static int lastSeenPreset = -1;
 static float dragY, dragV;
 static float* lastClickV = NULL; static double lastClickT = 0;
 
@@ -96,7 +98,7 @@ static Color mixc(Color a, Color b, float t) {
 static Color hexc(unsigned v) { return (Color){ (unsigned char)(v >> 16), (unsigned char)(v >> 8), (unsigned char)v, 255 }; }
 static float lum(Color c) { return 0.299f * c.r + 0.587f * c.g + 0.114f * c.b; }
 static int hover(Rectangle r) { return CheckCollisionPointRec(M, r); }
-static int clicked(Rectangle r) { if (hover(r)) { if (cursorWant == 0) cursorWant = 1; return mPressed && !activeV; } return 0; }
+static int clicked(Rectangle r) { if (hover(r)) { if (cursorWant == 0) cursorWant = 1; return mPressed && !activeV && !activeScroll; } return 0; }
 
 static void txt(Font f, const char* s, float x, float y, float size, float sp, Color c) { DrawTextEx(f, s, (Vector2){ x, y }, size, sp, c); }
 static float tw(Font f, const char* s, float size, float sp) { return MeasureTextEx(f, s, size, sp).x; }
@@ -878,14 +880,60 @@ static void drawBanner(void)
 #define SX 896.0f
 #define SW 288.0f
 
+#define SBW 10.0f        /* largura da barra de rolagem */
+
+/* Barra de rolagem que funciona só com clique e arraste:
+   arraste o polegar, ou clique na trilha para pular até aquele ponto. */
+static void scrollbar(Rectangle track, float* scroll, float contentH)
+{
+    float viewH = track.height;
+    if (contentH <= viewH) { *scroll = 0; return; }
+    float maxS = contentH - viewH;
+    float th = fmaxf(36.0f, track.height * viewH / contentH);
+    float ty = track.y + (track.height - th) * (*scroll / maxS);
+    Rectangle hit = { track.x - 4, track.y, track.width + 8, track.height };
+    int h = hover(hit) && !typing;
+    if (h || activeScroll == scroll) cursorWant = 1;
+    if (h && mPressed && !activeV && !activeScroll) {
+        activeScroll = scroll;
+        scrollGrab = (M.y >= ty && M.y <= ty + th) ? M.y - ty : th / 2;
+    }
+    if (activeScroll == scroll && mDown) {
+        *scroll = clampf((M.y - scrollGrab - track.y) / (track.height - th), 0, 1) * maxS;
+        ty = track.y + (track.height - th) * (*scroll / maxS);
+    }
+    int act = activeScroll == scroll;
+    DrawRectangleRounded(track, 1, 8, h || act ? (Color){ 40, 42, 48, 255 } : (Color){ 34, 36, 41, 255 });
+    Rectangle thumb = { track.x + 1, ty + 1, track.width - 2, th - 2 };
+    DrawRectangleRounded(thumb, 1, 8, act ? C_ACC : (h ? (Color){ 130, 134, 144, 255 } : (Color){ 92, 96, 105, 255 }));
+    if (th > 44) for (int i = -1; i <= 1; i++)
+        DrawRectangle((int)(thumb.x + 3), (int)(thumb.y + thumb.height / 2 + i * 4), (int)(thumb.width - 6), 1,
+                      act ? (Color){ 90, 58, 16, 255 } : (Color){ 52, 54, 60, 255 });
+}
+
 static void drawPresetsTab(void)
 {
     Rectangle L = { SX, 112, SW, 400 };
     const float rowH = 34, headH = 28;
     int nUser = 0; for (int i = 0; i < nPresets; i++) if (!presets[i].builtin) nUser++;
     float contentH = headH + NFACTORY * rowH + headH + (nUser ? nUser * rowH : rowH);
+    int canScroll = contentH > L.height;
+    float rowW = canScroll ? SW - SBW - 6 : SW;
     if (hover(L) && wheel != 0) scrollPresets -= wheel * 40;
+    /* trocou de preset (pelas setas lá em cima, por exemplo): rola a lista até ele */
+    if (curPreset != lastSeenPreset) {
+        float py;
+        if (presets[curPreset].builtin) py = headH + curPreset * rowH;
+        else {
+            int u = 0; for (int i = 0; i < curPreset; i++) if (!presets[i].builtin) u++;
+            py = headH + NFACTORY * rowH + headH + u * rowH;
+        }
+        if (py < scrollPresets) scrollPresets = py - headH;
+        else if (py + rowH > scrollPresets + L.height) scrollPresets = py + rowH - L.height + 8;
+        lastSeenPreset = curPreset;
+    }
     scrollPresets = clampf(scrollPresets, 0, fmaxf(0, contentH - L.height));
+    scrollbar((Rectangle){ SX + SW - SBW, L.y, SBW, L.height }, &scrollPresets, contentH);
     int modified = presetModified();
 
     clipBegin(L);
@@ -897,16 +945,16 @@ static void drawPresetsTab(void)
         for (int i = 0; i < nPresets; i++) {
             if (presets[i].builtin != (pass == 0)) continue;
             any = 1;
-            Rectangle r = { SX, y, SW, rowH - 3 };
+            Rectangle r = { SX, y, rowW, rowH - 3 };
             y += rowH;
             if (r.y + r.height < L.y || r.y > L.y + L.height) continue;
             int sel = i == curPreset, h = hover(r) && hover(L);
             if (sel) DrawRectangleRounded(r, 0.2f, 8, (Color){ 48, 42, 34, 255 });
             else if (h) DrawRectangleRounded(r, 0.2f, 8, C_HOVER);
-            char nm[80]; fitText(nm, sizeof nm, fUi, presets[i].name, 15, SW - (sel && modified ? 92 : 28));
+            char nm[80]; fitText(nm, sizeof nm, fUi, presets[i].name, 15, rowW - (sel && modified ? 92 : 28));
             txt(fUi, nm, r.x + 12, r.y + (r.height - 15) / 2 - 1, 15, 0, sel ? C_ACC : C_TEXT);
             if (sel && modified) txtR(fUi, "alterado", r.x + r.width - 12, r.y + (r.height - 12) / 2, 12, 0, C_ACC);
-            if (h) { cursorWant = 1; if (mPressed && !typing && !activeV) applyPreset(i); }
+            if (h) { cursorWant = 1; if (mPressed && !typing && !activeV && !activeScroll) { applyPreset(i); lastSeenPreset = i; } }
         }
         if (!any) {
             txt(fUi, "Nenhum ainda. Ajuste o som e salve.", SX + 12, y + 8, 13, 0, C_MUTED);
@@ -914,10 +962,6 @@ static void drawPresetsTab(void)
         }
     }
     EndScissorMode();
-    if (contentH > L.height) {
-        float bh = L.height * L.height / contentH, by = L.y + (L.height - bh) * (scrollPresets / (contentH - L.height));
-        DrawRectangleRounded((Rectangle){ SX + SW - 3, by, 3, bh }, 1, 4, C_LINE);
-    }
 
     float by = 528;
     DrawLine((int)SX, (int)by - 8, (int)(SX + SW), (int)by - 8, C_LINE);
@@ -1042,7 +1086,9 @@ static int deviceList(Rectangle L, int isCapture, int sel, float* scroll)
     DrawRectangleRoundedLinesEx(L, 0.05f, 8, 1, C_LINE);
     if (hover(L) && wheel != 0) *scroll -= wheel * 26;
     *scroll = clampf(*scroll, 0, fmaxf(0, contentH - L.height + 4));
-    Rectangle in = { L.x + 2, L.y + 2, L.width - 4, L.height - 4 };
+    int canScroll = contentH > L.height - 4;
+    Rectangle in = { L.x + 2, L.y + 2, L.width - 4 - (canScroll ? SBW + 4 : 0), L.height - 4 };
+    if (canScroll) scrollbar((Rectangle){ L.x + L.width - SBW - 3, L.y + 3, SBW, L.height - 6 }, scroll, contentH - 2);
     clipBegin(in);
     for (int r = 0; r < rows; r++) {
         int idx = r - 1;
@@ -1056,7 +1102,7 @@ static int deviceList(Rectangle L, int isCapture, int sel, float* scroll)
         const char* name = idx < 0 ? "Padrão do Windows" : (isCapture ? audio_capture_name(idx) : audio_playback_name(idx));
         char nm[300]; fitText(nm, sizeof nm, fUi, name, 14, row.width - 40);
         txt(fUi, nm, row.x + 30, row.y + (rowH - 14) / 2 - 1, 14, 0, s ? C_TEXT : withA(C_TEXT, 0.82f));
-        if (h) { cursorWant = 1; if (mPressed) res = idx; }
+        if (h) { cursorWant = 1; if (mPressed && !activeScroll && !activeV) res = idx; }
     }
     EndScissorMode();
     return res;
@@ -1091,7 +1137,7 @@ static void drawAudioTab(void)
     if (r != -2 && r != selOut) { selOut = r; restartIfRunning(); }
 
     txt(fBold, "NÍVEL DA ENTRADA", SX, 374, 13, 1.4f, C_MUTED);
-    char tv[24]; snprintf(tv, sizeof tv, "%+.1f dB", trimDb());
+    char tv[24]; float tdb = trimDb(); if (fabsf(tdb) < 0.05f) tdb = 0; snprintf(tv, sizeof tv, "%+.1f dB", tdb);
     txtR(fUi, tv, SX + SW, 373, 13, 0, C_TEXT);
     hslider((Rectangle){ SX + 8, 398, SW - 16, 6 }, &trimNorm, 12.0f / 36.0f, 12.0f / 36.0f);
     inTrimDb = trimDb();
@@ -1196,6 +1242,8 @@ static void drawRecTab(void)
     float contentH = n * rowH;
     if (hover(L) && wheel != 0) scrollRec -= wheel * 40;
     scrollRec = clampf(scrollRec, 0, fmaxf(0, contentH - L.height));
+    float recW = contentH > L.height ? SW - SBW - 6 : SW;
+    scrollbar((Rectangle){ SX + SW - SBW, L.y, SBW, L.height }, &scrollRec, contentH);
     if (confirmTrash >= 0 && GetTime() > confirmTrashUntil) confirmTrash = -1;
     int playingIt = rec_playing() ? rec_play_item() : -1;
     if (n == 0) {
@@ -1204,7 +1252,7 @@ static void drawRecTab(void)
     }
     clipBegin(L);
     for (int i = 0; i < n; i++) {
-        Rectangle r = { SX, L.y + i * rowH - scrollRec, SW, rowH - 4 };
+        Rectangle r = { SX, L.y + i * rowH - scrollRec, recW, rowH - 4 };
         if (r.y + r.height < L.y || r.y > L.y + L.height) continue;
         int hr = hover(r) && hover(L);
         int pl = i == playingIt, conf = i == confirmTrash;
@@ -1232,7 +1280,7 @@ static void drawRecTab(void)
             trashIcon(tb.x + 14, tb.y + 14, conf ? (Color){ 255, 200, 194, 255 } : (ht ? C_TEXT : C_MUTED));
         }
         if (hr) cursorWant = 1;
-        if (hr && mPressed && !activeV && !typing) {
+        if (hr && mPressed && !activeV && !activeScroll && !typing) {
             if (ht) {
                 if (conf) {
                     if (!rec_trash(i)) setBanner("Não foi possível mandar a gravação para a Lixeira.", C_BAD, 5, 0);
@@ -1243,10 +1291,6 @@ static void drawRecTab(void)
         }
     }
     EndScissorMode();
-    if (contentH > L.height) {
-        float bh = L.height * L.height / contentH, by = L.y + (L.height - bh) * (scrollRec / (contentH - L.height));
-        DrawRectangleRounded((Rectangle){ SX + SW - 3, by, 3, bh }, 1, 4, C_LINE);
-    }
 
     Rectangle P = { SX, 608, SW, 92 };
     DrawRectangleRounded(P, 0.12f, 8, C_FIELD);
@@ -1483,10 +1527,19 @@ int main(void)
         mDown = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
         mPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
         mReleased = IsMouseButtonReleased(MOUSE_BUTTON_LEFT);
+        if (getenv("GNP_DRAG")) {   /* teste: "x,y0,y1" aperta em (x,y0), arrasta até y1 e solta */
+            float dx = 0, y0 = 0, y1 = 0;
+            sscanf(getenv("GNP_DRAG"), "%f,%f,%f", &dx, &y0, &y1);
+            int f0 = 6, f1 = 22;
+            float t = clampf((float)(frame - f0) / (f1 - f0), 0, 1);
+            M = (Vector2){ dx, y0 + (y1 - y0) * t };
+            mPressed = frame == f0; mDown = frame >= f0 && frame <= f1; mReleased = frame == f1 + 1;
+        }
         wheel = GetMouseWheelMove();
         cursorWant = 0;
 
         if (activeV && !mDown) activeV = NULL;
+        if (activeScroll && !mDown) activeScroll = NULL;
         handleTyping();
         if (!typing) {
             if (IsKeyPressed(KEY_SPACE)) togglePower();
